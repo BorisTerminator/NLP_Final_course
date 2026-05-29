@@ -1,0 +1,5 @@
+Approach,Accuracy,F1_weighted
+Rule-based,0.44,0.4494
+TF-IDF + LR,0.79,0.7897
+GigaChat Zero-shot,0.62,0.5891
+GigaChat Few-shot,0.79,0.7866

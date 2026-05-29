@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+models/
+.env
+*.pkl
+results/results_partial.json
