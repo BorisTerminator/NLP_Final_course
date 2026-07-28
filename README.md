@@ -1,106 +1,124 @@
-# Классификация финансовых трат на русском языке
+# expense-category-classifier
 
-## Финальный проект по курсу NLP, весна 2026
+Nine-class categorisation of very short free-text expense notes, with four approaches
+benchmarked against each other on the same split.
 
-Многоклассовая классификация коротких русскоязычных описаний расходов по 9 категориям.
+The interesting result is negative: a 1990s-era linear model matches a modern LLM, so the
+LLM does not earn its place in production.
 
-## Задача
+## The task
 
-По короткой пользовательской записи (1–10 слов) определить категорию траты:
+Given a note a user types into an expense tracker — one to ten words, Russian, often
+misspelled and mixing brand names with amounts — assign one of nine categories.
 
-| Категория | Примеры |
-| --------- | ------- |
-| еда | «продукты в пятёрочке», «молоко хлеб 300р» |
-| транспорт | «такси до офиса», «заправка лукойл» |
-| кафе | «кофе в старбаксе», «ужин с другом 2500р» |
-| здоровье | «аптека таблетки», «анализы крови» |
-| одежда | «кроссовки новые 3500₽», «джинсы зара» |
-| техника | «наушники airpods», «зарядка для телефона» |
-| подписки | «яндекс плюс», «netflix месяц» |
-| развлечения | «кино с женой», «квест на двоих» |
-| другое | «подарок маме», «цветы 800р» |
+| Category | Typical input |
+|---|---|
+| groceries | «продукты в пятёрочке», «молоко хлеб 300р» |
+| transport | «такси до офиса», «заправка лукойл» |
+| eating out | «кофе в старбаксе», «ужин с другом 2500р» |
+| health | «аптека таблетки», «анализы крови» |
+| clothing | «кроссовки новые 3500₽», «джинсы зара» |
+| electronics | «наушники airpods», «зарядка для телефона» |
+| subscriptions | «яндекс плюс», «netflix месяц» |
+| entertainment | «кино с женой», «квест на двоих» |
+| other | «подарок маме», «цветы 800р» |
 
-## Датасет
+Two properties make this harder than the class count suggests: the inputs are far too
+short for context to disambiguate, and several categories overlap by construction —
+a pharmacy purchase is *health*, but a supermarket purchase that includes medicine is
+*groceries*.
 
-Синтетический датасет, сгенерированный через GigaChat-2 (temperature=0.7):
+## Results
 
-- **995 примеров**, 9 категорий
-- **Train**: 796 | **Val**: 99 | **Test**: 100
-- От 66 до 140 примеров на категорию
+Measured on a held-out 100-example test set. Raw numbers in
+[`results/results.json`](results/results.json).
 
-## Результаты
+| Approach | Accuracy | F1 (weighted) |
+|---|---|---|
+| Rule-based keywords | 0.44 | 0.449 |
+| **TF-IDF + Logistic Regression** | **0.79** | **0.790** |
+| LLM zero-shot | 0.62 | 0.589 |
+| LLM few-shot | 0.79 | 0.787 |
 
-| Подход | Accuracy | F1 (weighted) |
-| ------ | -------- | ------------- |
-| Rule-based | 0.44 | 0.45 |
-| TF-IDF + LR | **0.79** | **0.79** |
-| GigaChat Zero-shot | 0.62 | 0.59 |
-| GigaChat Few-shot | **0.79** | **0.79** |
+**Reading the table.** The keyword baseline sets the floor. Zero-shot prompting beats it
+but loses badly to a trained linear model — the LLM knows language, not this label
+taxonomy. Few-shot closes the gap entirely: twenty-seven examples in the prompt buy the
+same accuracy as supervised training.
 
-**Основной вывод:** TF-IDF+LR на символьных n-граммах и GigaChat Few-shot показывают одинаковую точность. Few-shot примечателен тем, что не требует обучения классификатора — достаточно нескольких примеров в промпте.
+TF-IDF + LR and few-shot finish in a statistical tie, and that decides the engineering
+question. The linear model trains in under a second, runs locally, costs nothing per call
+and has no rate limit. It is the correct choice.
 
-## Структура проекта
+Where few-shot stays valuable is the cold start: it reaches production accuracy with no
+labelled training set at all, which makes it the right tool while a taxonomy is still
+changing and the wrong one once it has settled.
 
-```text
-data/
-  dataset.csv     # полный датасет (995 примеров)
-  train.csv       # обучающая выборка 80% (796)
-  val.csv         # валидационная выборка 10% (99)
-  test.csv        # тестовая выборка 10% (100)
-src/
-  generate_dataset.py   # генерация датасета через GigaChat API
-  baseline_rules.py     # правила (keyword matching)
-  baseline_tfidf.py     # TF-IDF + логистическая регрессия
-  gigachat_zeroshot.py  # GigaChat zero-shot
-  gigachat_fewshot.py   # GigaChat few-shot (предложенный подход)
-  run_experiments.py    # запуск всех экспериментов
-  generate_report.py    # генерация report/report.pdf
-results/
-  results.json    # метрики всех подходов
-  results.csv     # таблица результатов
-report/
-  report.pdf      # полный научный отчёт
-requirements.txt
-```
+## Data
 
-## Запуск
+No public corpus of Russian expense notes exists, so the dataset is synthetic — generated
+with GigaChat-2 at temperature 0.7, then split.
+
+| | Examples |
+|---|---|
+| Total | 995 |
+| Train | 796 |
+| Validation | 99 |
+| Test | 100 |
+
+Per-category counts range from 66 to 140. Generating the data with an LLM and then showing
+that a linear model beats that same LLM at the task is a deliberate part of the design.
+
+## Approaches in detail
+
+**Rule-based** — 20–30 keywords per category covering brands, place names and product
+types. No training. Serves as the floor any learned model must clear.
+
+**TF-IDF + Logistic Regression** — character n-grams of length 2–4, 50 000 features,
+sublinear term frequency, multiclass logistic regression at `C=5.0`. Character n-grams
+rather than words, because the inputs are short and misspelled: `пятёрочка` and
+`пятерочка` must land in the same place. Trains on 796 examples in under a second.
+
+**LLM zero-shot** — the prompt carries the category list and the text, nothing else.
+
+**LLM few-shot** — three labelled examples per class, twenty-seven in total, drawn from
+the training split and added to the prompt. This is what resolves the near-miss pairs the
+zero-shot prompt confuses.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `src/generate_dataset.py` | Synthetic dataset generation via the GigaChat API |
+| `src/baseline_rules.py` | Keyword baseline |
+| `src/baseline_tfidf.py` | TF-IDF + logistic regression |
+| `src/gigachat_zeroshot.py` | Zero-shot prompting |
+| `src/gigachat_fewshot.py` | Few-shot prompting |
+| `src/run_experiments.py` | Runs every approach, writes `results/` |
+| `src/run_fewshot.py` | Few-shot run on its own |
+| `src/generate_report.py` | Builds `report/report.pdf` |
+| `data/` | Full dataset plus train / validation / test splits |
+| `results/` | `results.json` and `results.csv` |
+| `report/report.pdf` | Full write-up |
+
+## Running it
 
 ```bash
 pip install -r requirements.txt
 
-# 1. Сгенерировать датасет (нужен ключ GigaChat API)
-python src/generate_dataset.py
-
-# 2. Запустить все эксперименты
+python src/generate_dataset.py   # needs a GigaChat API key
 python src/run_experiments.py
-
-# 3. Сгенерировать PDF отчёт
 python src/generate_report.py
 ```
 
-## Описание подходов
+## Stack
 
-### 1. Rule-based (Baseline 1)
+Python · scikit-learn · GigaChat API · pandas
 
-Словари ключевых слов — 20–30 ключевых слов на категорию (бренды, названия мест, типы товаров). Не требует обучения.
-
-### 2. TF-IDF + Logistic Regression (Baseline 2)
-
-Символьные n-граммы (2–4), 50 000 признаков, sublinear TF, мультиклассовая LR (C=5.0). Обучается на 796 примерах за < 1 секунды.
-
-### 3. GigaChat Zero-shot (конкурентный подход)
-
-Прямая классификация через LLM без примеров: промпт содержит только список категорий и текст для классификации.
-
-### 4. GigaChat Few-shot (предложенный подход)
-
-3 размеченных примера на каждый класс (27 пар всего) добавляются в промпт из обучающей выборки. Устраняет неоднозначность между близкими категориями без дообучения модели.
-
-## Литература
+## References
 
 1. Joulin et al. *Bag of Tricks for Efficient Text Classification.* EACL 2017.
 2. Zhang et al. *Character-level Convolutional Networks for Text Classification.* NeurIPS 2015.
 3. Devlin et al. *BERT: Pre-training of Deep Bidirectional Transformers.* NAACL 2019.
-4. Куратов, Архипов. *Адаптация глубоких двунаправленных трансформеров для русского языка.* arXiv 2019.
+4. Kuratov, Arkhipov. *Adaptation of Deep Bidirectional Multilingual Transformers for Russian Language.* arXiv 2019.
 5. Brown et al. *Language Models are Few-Shot Learners.* NeurIPS 2020.
-6. Сбербанк. *GigaChat.* [developers.sber.ru/portal/products/gigachat](https://developers.sber.ru/portal/products/gigachat), 2024.
+6. Sber. *GigaChat.* [developers.sber.ru/portal/products/gigachat](https://developers.sber.ru/portal/products/gigachat), 2024.
